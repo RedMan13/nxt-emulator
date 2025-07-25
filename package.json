@@ -1,0 +1,21 @@
+{
+  "name": "nxt-emulator",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node ./src/index.js",
+    "test": "node ./src/index.js ./test-bench/test.rxe"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "3d-core-raub": "^4.3.0",
+    "glfw-raub": "^5.7.0",
+    "image-raub": "^4.3.0",
+    "nxtRICfileUtil": "github:RedMan13/nxtRICfileUtil#main",
+    "twgl.js": "^7.0.0",
+    "webgl-raub": "^4.2.0"
+  }
+}
