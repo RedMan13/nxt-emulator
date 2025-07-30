@@ -56,6 +56,7 @@ const textureBuffer = twgl.createTexture(gl, {
 const pixelState = new Array(render.width).fill([]).map(() => new Array(render.height).fill(0));
 let dt = 0;
 let dtStart = Date.now();
+module.exports = document;
 (function draw() {
     gl.viewport(0,0, canvas.width, canvas.height);
     gl.useProgram(progInfo.program);

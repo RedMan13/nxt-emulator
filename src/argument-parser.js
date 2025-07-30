@@ -25,8 +25,9 @@ module.exports = function parseArgs(keys, argv) {
                 ? lookup[arg.slice(2)]
                 : lookup[arg.slice(1)]
             : lookup['default'] ?? 'default';
-        if (arg[0] === '-') i++;
-        args[key] = argv[i];
+        const hasValue = (arg[0] === '-' && (argv[i +1]?.[0] ?? '-') !== '-');
+        if (arg[0] === '-' && hasValue) i++;
+        args[key] = !hasValue ? true : argv[i];
     }
     if ('help' in args) {
         let largest;
@@ -52,6 +53,8 @@ module.exports = function parseArgs(keys, argv) {
                 return `${spacing}  ${str[0]} : ${str[1]} ${str[2]}`;
             });
 
+        console.log('Help document, command format `nxtea \x1b[3m--arguments \x1b[32m\x1b[1mdefault\x1b[0m`');
+        console.log('Arguments: ')
         console.log(lines.map(line => line.split(':')[0].padStart(largest, ' ') + ':' + line.split(':').slice(1).join(':')).join('\n'));
         process.exit(0);
     }
