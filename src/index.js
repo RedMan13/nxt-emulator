@@ -7,7 +7,8 @@ global.args = parseArgs({
     capture: [['c'], false, 'If we should be using captured frames from the NXT instead of running the executable, if a file is provided anyways the file will be uploaded to the NXT and ran'],
     target: [['t'], null, 'Sets up a connection with an NXT brick over USB, if unset it will just be the first recognisable devices, otherwise it is one of usb device id, bluetooth address, or NXT name'],
     list: [['l'], null, 'List all NXT devices that can be connected'],
-    pollRate: [['p'], 66, 'The milisecond interval that we should poll the NXT screen at']
+    // 260 seems to be about the maximum speed the nxt will respond to us 
+    pollRate: [['p'], 260, 'The milisecond interval that we should poll the NXT screen at']
 }, process.argv);
 
 const { render, decodeBinnary } = require('nxtRICfileUtil');
@@ -134,8 +135,10 @@ const NXTCommunication = require('./nxt-communication');
                     offset += length;
                     requested -= length;
                 }
+                const toWait = args.pollRate - (Date.now() - start);
+                if (toWait < 0) console.warn(`Could not complete frame grab in time, took ${Math.abs(toWait)}MS to long`);
                 // we HAVE to keep proper order, or else we get a completely uninteligable result
-                setTimeout(getFrame, args.pollRate - (Date.now() - start));
+                setTimeout(getFrame, toWait);
             })();
         }
     } else {
