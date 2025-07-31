@@ -3,6 +3,9 @@ const path = require('path');
 const EventEmitter = require('events');
 const usb = new WebUSB({ allowAllDevices: true });
 
+/**
+ * @typedef {{ status: Status, command: Commands, [key: string]: any }} CommandReturn
+ */
 /** @enum */
 const Status = {
     success: 0,
@@ -403,7 +406,7 @@ class NXTCommunication extends EventEmitter {
                     break;
                 case Commands.deviceInfo:
                     Object.assign(event, {
-                        name: buf.subarray(3, 18).toString('ascii'),
+                        name: asciiz(buf, 3, 18),
                         bluetoothAddress: buf.subarray(18, 25).toString('hex'),
                         channelQualities: [buf.readUInt8(25), buf.readUInt8(26), buf.readUInt8(27), buf.readUInt8(28)],
                         availableFlash: buf.readUInt32LE(29)
@@ -413,7 +416,7 @@ class NXTCommunication extends EventEmitter {
                 case Commands.findFile:
                     Object.assign(event, {
                         handle: buf.readUInt8(3),
-                        filename: buf.subarray(4, 24).toString('ascii'),
+                        filename: asciiz(buf, 4, 24),
                         size: buf.readUInt32LE(24)
                     })
                     break;
@@ -421,7 +424,7 @@ class NXTCommunication extends EventEmitter {
                 case Commands.findModule:
                     Object.assign(event, {
                         handle: buf.readUInt8(3),
-                        name: buf.subarray(4, 24).toString('ascii'),
+                        name: asciiz(buf, 4, 24),
                         moduleID: buf.readUInt32LE(24),
                         size: buf.readUInt32LE(28),
                         mapSize: buf.readUInt16LE(32)
@@ -485,7 +488,7 @@ class NXTCommunication extends EventEmitter {
                     Object.assign(event, {
                         inbox: buf.readUInt8(3),
                         length: buf.readUInt8(4),
-                        content: buf.subarray(5, 64).toString('ascii')
+                        content: asciiz(buf, 5, 64)
                     });
                     break;
                 case Commands.openAppendDataFile:
@@ -559,10 +562,18 @@ class NXTCommunication extends EventEmitter {
         }
         this.emit(Commands[command], event);
     }
-    send(type, command, args, reply) {
+    /**
+     * Send a message to the NXT
+     * @param {CommandTypes} type 
+     * @param {Commands} command 
+     * @param {{ [key: string]: any }} args 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn|null>}
+     */
+    send(type, command, args, noReply) {
         return new Promise(async (resolve, reject) => {
             const buffer = Buffer.alloc(64);
-            buffer.writeUInt8(type | (reply ? 0x80 : 0), 0);
+            buffer.writeUInt8(type | (noReply ? 0x80 : 0), 0);
             buffer.writeUInt8(command, 1);
             switch (command) {
             case Commands.bootBrick: buffer.write('Let\'s dance: SAMBA\0', 2, 'ascii'); break;
@@ -657,14 +668,14 @@ class NXTCommunication extends EventEmitter {
                 break;
             }
             await this.device.transferOut(1, buffer);
-            if (reply) return resolve();
+            if (noReply) return resolve();
             const handle = res => resolve(res);
             this.once(Commands[command], handle);
             // if we dont recieve a response in time, assume we wont ever recieve a response
             setTimeout(() => {
                 this.off(Commands[command], handle);
                 // the NXT doesnt actually have any error message for this, sadly
-                resolve({ status: Status.undefinedError, timedout: true });
+                resolve({ command, status: Status.undefinedError, timedout: true });
             }, 4000);
         });
     }
@@ -677,224 +688,574 @@ class NXTCommunication extends EventEmitter {
     }
     // here comes the de-verbosed helper functions
     // remote control commands
-    async startProgram(filename, reply) {
-        const res = await this.send(CommandTypes.control, Commands.startProgram, { filename }, reply);
+    /**
+     * Starts a program on the NXT
+     * @param {string} filename 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn>}
+     */
+    async startProgram(filename, noReply) {
+        const res = await this.send(CommandTypes.control, Commands.startProgram, { filename }, noReply);
         this.makeError(res);
         return res;
     }
-    async stopProgram(reply) { 
-        const res = await this.send(CommandTypes.control, Commands.stopProgram, {}, reply);
+    /**
+     * Stops any currently running program on the NXT
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn>}
+     */
+    async stopProgram(noReply) { 
+        const res = await this.send(CommandTypes.control, Commands.stopProgram, {}, noReply);
         this.makeError(res);
         return res;
     }
-    async playSound(filename, loop = false, reply) {
-        const res = await this.send(CommandTypes.control, Commands.playSound, { filename, loop }, reply);
+    /**
+     * Plays a sound file on the NXT
+     * @param {string} filename 
+     * @param {boolean?} loop 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn>}
+     */
+    async playSound(filename, loop = false, noReply) {
+        const res = await this.send(CommandTypes.control, Commands.playSound, { filename, loop }, noReply);
         this.makeError(res);
         return res;
     }
-    async playTone(frequency, duration, reply) {
-        const res = await this.send(CommandTypes.control, Commands.playTone, { frequency, duration }, reply);
+    /**
+     * Plays a tone on the NXT
+     * @param {number} frequency 
+     * @param {number} duration 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn>}
+     */
+    async playTone(frequency, duration, noReply) {
+        const res = await this.send(CommandTypes.control, Commands.playTone, { frequency, duration }, noReply);
         this.makeError(res);
         return res;
     }
-    async setOutput(port, power, mode, regulator, ratio, state, tachometerLimit, reply) {
-        const res = await this.send(CommandTypes.control, Commands.setOutput, { port, power, mode, regulator, ratio, state, tachometerLimit }, reply);
+    /**
+     * Sets an output port on the NXT (A-C) to a specific state
+     * @param {OutputPorts} port 
+     * @param {number} power 
+     * @param {MotorModeBits} mode 
+     * @param {MotorRegulators} regulator 
+     * @param {number} ratio 
+     * @param {MotorState} state 
+     * @param {number} tachometerLimit 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn>}
+     */
+    async setOutput(port, power, mode, regulator, ratio, state, tachometerLimit, noReply) {
+        const res = await this.send(CommandTypes.control, Commands.setOutput, { port, power, mode, regulator, ratio, state, tachometerLimit }, noReply);
         this.makeError(res);
         return res;
     }
-    async setInput(port, type, mode, reply) {
-        const res = await this.send(CommandTypes.control, Commands.setInput, { port, type, mode }, reply);
+    /**
+     * Sets the configuration for an input port (1-4) on the NXT
+     * @param {InputPorts} port 
+     * @param {SensorTypes} type 
+     * @param {SensorModes} mode 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn>}
+     */
+    async setInput(port, type, mode, noReply) {
+        const res = await this.send(CommandTypes.control, Commands.setInput, { port, type, mode }, noReply);
         this.makeError(res);
         return res;
     }
-    async getOutput(port, reply) {
-        const res = await this.send(CommandTypes.control, Commands.getOutput, { port }, reply);
+    /**
+     * Gets an output ports (A-C) state and values
+     * @param {OutputPorts} port 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & {
+     *     port: OutputPorts,
+     *     power: number,
+     *     mode: MotorModeBits,
+     *     regulator: MotorRegulators,
+     *     ratio: number,
+     *     state: MotorState,
+     *     tachometerLimit: number,
+     *     tachometerCount: number,
+     *     tachometerMovement: number,
+     *     rotation: number,
+     * }>}
+     */
+    async getOutput(port, noReply) {
+        const res = await this.send(CommandTypes.control, Commands.getOutput, { port }, noReply);
         this.makeError(res);
         return res;
     }
-    async getInput(port, reply) {
-        const res = await this.send(CommandTypes.control, Commands.getInput, { port }, reply);
+    /**
+     * Gets an input ports (1-4) configuration and values
+     * @param {InputPorts} port 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & {
+     *     port: InputPorts,
+     *     valid: boolean,
+     *     calibrated: boolean,
+     *     type: SensorTypes,
+     *     mode: SensorModes,
+     *     raw: number,
+     *     normalized: number,
+     *     scaled: number,
+     *     calibrated: number
+     * }>}
+     */
+    async getInput(port, noReply) {
+        const res = await this.send(CommandTypes.control, Commands.getInput, { port }, noReply);
         this.makeError(res);
         return res;
     }
-    async clearInput(port, reply) {
-        const res = await this.send(CommandTypes.control, Commands.clearInput, { port }, reply);
+    /**
+     * Clears the values and state of an input
+     * @param {InputPorts} port 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn>}
+     */
+    async clearInput(port, noReply) {
+        const res = await this.send(CommandTypes.control, Commands.clearInput, { port }, noReply);
         this.makeError(res);
         return res;
     }
-    async writeMessage(inbox, length, message, reply) {
-        const res = await this.send(CommandTypes.control, Commands.writeMessage, { inbox, length, message }, reply);
+    /**
+     * Writes a message into the NXTs mailbox
+     * @param {number} inbox 
+     * @param {number} length 
+     * @param {string} message 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn>}
+     */
+    async writeMessage(inbox, length, message, noReply) {
+        const res = await this.send(CommandTypes.control, Commands.writeMessage, { inbox, length, message }, noReply);
         this.makeError(res);
         return res;
     }
-    async resetMotorPos(port, relative, reply) {
-        const res = await this.send(CommandTypes.control, Commands.resetMotorPos, { port, relative }, reply);
+    /**
+     * Resets the position of a motor on the NXT
+     * @param {OutputPorts} port 
+     * @param {boolean} relative 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn>}
+     */
+    async resetMotorPos(port, relative, noReply) {
+        const res = await this.send(CommandTypes.control, Commands.resetMotorPos, { port, relative }, noReply);
         this.makeError(res);
         return res;
     }
-    async getBattery(reply) { 
-        const res = await this.send(CommandTypes.control, Commands.getBattery, {}, reply);
+    /**
+     * Gets the battery level of the NXT
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { voltage: number }>}
+     */
+    async getBattery(noReply) { 
+        const res = await this.send(CommandTypes.control, Commands.getBattery, {}, noReply);
         this.makeError(res);
         return res;
     }
-    async stopSounds(reply) { 
-        const res = await this.send(CommandTypes.control, Commands.stopSounds, {}, reply);
+    /**
+     * Stops all sounds on the NXT
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn>}
+     */
+    async stopSounds(noReply) { 
+        const res = await this.send(CommandTypes.control, Commands.stopSounds, {}, noReply);
         this.makeError(res);
         return res;
     }
-    async keepAlive(reply) { 
-        const res = await this.send(CommandTypes.control, Commands.keepAlive, {}, reply);
+    /**
+     * Asks th NXT to reset its sleep timer, returns how long the NXT intends to wait before sleeping
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { sleepLength: number }>}
+     */
+    async keepAlive(noReply) { 
+        const res = await this.send(CommandTypes.control, Commands.keepAlive, {}, noReply);
         this.makeError(res);
         return res;
     }
-    async lowspeedStatus(port, reply) {
-        const res = await this.send(CommandTypes.control, Commands.lowspeedStatus, { port }, reply);
+    /**
+     * Gets the status info of the lowspeed (input) ports on the NXT
+     * @param {InputPorts} port 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { maxBytes: number }>}
+     */
+    async lowspeedStatus(port, noReply) {
+        const res = await this.send(CommandTypes.control, Commands.lowspeedStatus, { port }, noReply);
         this.makeError(res);
         return res;
     }
-    async lowspeedWrite(port, lengthSent, lengthRecieved, data, reply) {
-        const res = await this.send(CommandTypes.control, Commands.lowspeedWrite, { port, lengthSent, lengthRecieved, data }, reply);
+    /**
+     * Write arbitrary data to the NXTs input ports
+     * @param {InputPorts} port 
+     * @param {number} lengthSent The length of the data to send
+     * @param {number} lengthRecieved The length of the data to expect back
+     * @param {Buffer} data 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn>}
+     */
+    async lowspeedWrite(port, lengthSent, lengthRecieved, data, noReply) {
+        const res = await this.send(CommandTypes.control, Commands.lowspeedWrite, { port, lengthSent, lengthRecieved, data }, noReply);
         this.makeError(res);
         return res;
     }
-    async lowspeedRead(port, reply) {
-        const res = await this.send(CommandTypes.control, Commands.lowspeedRead, { port }, reply);
+    /**
+     * Get the data we expected from an input port
+     * @param {InputPorts} port 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { bytesFetched: number, bytes: Buffer }>}
+     */
+    async lowspeedRead(port, noReply) {
+        const res = await this.send(CommandTypes.control, Commands.lowspeedRead, { port }, noReply);
         this.makeError(res);
         return res;
     }
-    async currentProgram(reply) { 
-        const res = await this.send(CommandTypes.control, Commands.currentProgram, {}, reply);
+    /**
+     * Gets the filename of the currently running program on the NXT
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { filename: string }>}
+     */
+    async currentProgram(noReply) { 
+        const res = await this.send(CommandTypes.control, Commands.currentProgram, {}, noReply);
         this.makeError(res);
         return res;
     }
-    async messageRead(remoteInbox, inbox, shouldRemove, reply) {
-        const res = await this.send(CommandTypes.control, Commands.messageRead, { remoteInbox, inbox, shouldRemove }, reply);
+    /**
+     * 
+     * @param {number} remoteInbox 
+     * @param {number} inbox 
+     * @param {boolean} shouldRemove 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { inbox: number, length: number, message: string }>}
+     */
+    async messageRead(remoteInbox, inbox, shouldRemove, noReply) {
+        const res = await this.send(CommandTypes.control, Commands.messageRead, { remoteInbox, inbox, shouldRemove }, noReply);
         this.makeError(res);
         return res;
     }
     // system commands
-    async openReadFile(filename, reply) {
-        const res = await this.send(CommandTypes.system, Commands.openReadFile, { filename }, reply);
+    /**
+     * Opens a file on the NXT for reading
+     * @param {string} filename 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { handle: number }>}
+     */
+    async openReadFile(filename, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.openReadFile, { filename }, noReply);
         this.makeError(res);
         return res;
     }
-    async openWriteFile(filename, size, reply) {
-        const res = await this.send(CommandTypes.system, Commands.openWriteFile, { filename, size }, reply);
+    /**
+     * Opens a file on the NXT for writing
+     * @param {string} filename 
+     * @param {number} size 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { handle: number }>}
+     */
+    async openWriteFile(filename, size, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.openWriteFile, { filename, size }, noReply);
         this.makeError(res);
         return res;
     }
-    async readFile(handle, length, reply) {
-        const res = await this.send(CommandTypes.system, Commands.readFile, { handle, length }, reply);
+    /**
+     * Read data from a file on the NXT, reads sequentially rather than just the first segment
+     * @param {number} handle 
+     * @param {number} length 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & {
+     *     handle: number,
+     *     length: number,
+     *     data: Buffer
+     * }>}
+     */
+    async readFile(handle, length, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.readFile, { handle, length }, noReply);
         this.makeError(res);
         return res;
     }
-    async writeFile(handle, data, reply) {
-        const res = await this.send(CommandTypes.system, Commands.writeFile, { handle, data }, reply);
+    /**
+     * Writes data to a file on the NXT, writes sequentially rather than just the first segment
+     * @param {number} handle 
+     * @param {Buffer} data 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { handle: number, length: number }>}
+     */
+    async writeFile(handle, data, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.writeFile, { handle, data }, noReply);
         this.makeError(res);
         return res;
     }
-    async closeFile(handle, reply) {
-        const res = await this.send(CommandTypes.system, Commands.closeFile, { handle }, reply);
+    /**
+     * Close a file handle on the NXT
+     * @param {number} handle 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { handle: number }>}
+     */
+    async closeFile(handle, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.closeFile, { handle }, noReply);
         this.makeError(res);
         return res;
     }
-    async deleteFile(filename, reply) {
-        const res = await this.send(CommandTypes.system, Commands.deleteFile, { filename }, reply);
+    /**
+     * Removes a file by name from the NXT
+     * @param {string} filename 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { filename: string }>}
+     */
+    async deleteFile(filename, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.deleteFile, { filename }, noReply);
         this.makeError(res);
         return res;
     }
-    async findFile(filename, reply) {
-        const res = await this.send(CommandTypes.system, Commands.findFile, { filename }, reply);
+    /**
+     * Finds a file by name on the NXT, opens the file for find next
+     * @param {string} filename 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & {
+     *     handle: number,
+     *     filename: string,
+     *     size: number
+     * }>}
+     */
+    async findFile(filename, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.findFile, { filename }, noReply);
         this.makeError(res);
         return res;
     }
-    async findNextFile(handle, reply) {
-        const res = await this.send(CommandTypes.system, Commands.findNextFile, { handle }, reply);
+    /**
+     * Finds the next file that matches the search string on handle
+     * @param {number} handle 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & {
+     *     handle: number,
+     *     filename: string,
+     *     size: number
+     * }>}
+     */
+    async findNextFile(handle, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.findNextFile, { handle }, noReply);
         this.makeError(res);
         return res;
     }
-    async firmwareVersion(reply) { 
-        const res = await this.send(CommandTypes.system, Commands.firmwareVersion, {}, reply);
+    /**
+     * Gets the NXTs firmware version
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & {
+     *     protocolVersion: number,
+     *     firmwareVersion: number
+     * }>}
+     */
+    async firmwareVersion(noReply) { 
+        const res = await this.send(CommandTypes.system, Commands.firmwareVersion, {}, noReply);
         this.makeError(res);
         return res;
     }
-    async openWriteLinearFile(filename, size, reply) {
-        const res = await this.send(CommandTypes.system, Commands.openWriteLinearFile, { filename, size }, reply);
+    /**
+     * Open a file for writing, but such that it is explicitly byte-for-byte inline on the flash
+     * @param {string} filename 
+     * @param {number} size 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { handle: number }>}
+     */
+    async openWriteLinearFile(filename, size, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.openWriteLinearFile, { filename, size }, noReply);
         this.makeError(res);
         return res;
     }
-    async openReadLinearFile(filename, reply) {
-        const res = await this.send(CommandTypes.system, Commands.openReadLinearFile, { filename }, reply);
+    /**
+     * Open a linear file for reading, does nothing on stock firmware
+     * @param {string} filename 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { handle: number }>}
+     */
+    async openReadLinearFile(filename, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.openReadLinearFile, { filename }, noReply);
         this.makeError(res);
         return res;
     }
-    async openWriteDataFile(filename, size, reply) {
-        const res = await this.send(CommandTypes.system, Commands.openWriteDataFile, { filename, size }, reply);
+    /**
+     * Opens a file to be writen as pure data
+     * @param {string} filename 
+     * @param {number} size 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { handle: number }>}
+     */
+    async openWriteDataFile(filename, size, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.openWriteDataFile, { filename, size }, noReply);
         this.makeError(res);
         return res;
     }
-    async openAppendDataFile(filename, reply) {
-        const res = await this.send(CommandTypes.system, Commands.openAppendDataFile, { filename }, reply);
+    /**
+     * Open a file for appending to the end of it
+     * @param {string} filename 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { handle: number, maxSize: number }>}
+     */
+    async openAppendDataFile(filename, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.openAppendDataFile, { filename }, noReply);
         this.makeError(res);
         return res;
     }
-    async findModule(moduleName, reply) {
-        const res = await this.send(CommandTypes.system, Commands.findModule, { moduleName }, reply);
+    /**
+     * Find a module on the NXT by name
+     * @param {string} moduleName 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & {
+     *     handle: number,
+     *     name: string
+     *     moduleID: number,
+     *     size: number,
+     *     mapSize: number
+     * }>}
+     */
+    async findModule(moduleName, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.findModule, { moduleName }, noReply);
         this.makeError(res);
         return res;
     }
-    async findNextModule(handle, reply) {
-        const res = await this.send(CommandTypes.system, Commands.findNextModule, { handle }, reply);
+    /**
+     * Find the next module on the NXT by search handle
+     * @param {string} moduleName 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & {
+     *     handle: number,
+     *     name: string
+     *     moduleID: number,
+     *     size: number,
+     *     mapSize: number
+     * }>}
+     */
+    async findNextModule(handle, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.findNextModule, { handle }, noReply);
         this.makeError(res);
         return res;
     }
-    async closeModule(handle, reply) {
-        const res = await this.send(CommandTypes.system, Commands.closeModule, { handle }, reply);
+    /**
+     * Closes an open module search handle
+     * @param {number} handle 
+     * @param {number?} noReply 
+     * @returns {Promise<CommandReturn & { handle: number }>}
+     */
+    async closeModule(handle, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.closeModule, { handle }, noReply);
         this.makeError(res);
         return res;
     }
-    async readIOMap(moduleID, offset, length, reply) {
-        const res = await this.send(CommandTypes.system, Commands.readIOMap, { moduleID, offset, length }, reply);
+    /**
+     * Reads data from a modules IO map on the NXT
+     * @param {number} moduleID 
+     * @param {number} offset 
+     * @param {number} length 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & {
+     *     moduleID: number,
+     *     length: number,
+     *     data: Buffer
+     * }>}
+     */
+    async readIOMap(moduleID, offset, length, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.readIOMap, { moduleID, offset, length }, noReply);
         this.makeError(res);
         return res;
     }
-    async writeIOMap(moduleID, offset, length, data, reply) {
-        const res = await this.send(CommandTypes.system, Commands.writeIOMap, { moduleID, offset, length, data }, reply);
+    /**
+     * Writes data to a modules IO map in the NXT
+     * @param {number} moduleID 
+     * @param {number} offset 
+     * @param {number} length 
+     * @param {Buffer} data 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & {
+     *     moduleID: number,
+     *     length: number
+     * }>}
+     */
+    async writeIOMap(moduleID, offset, length, data, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.writeIOMap, { moduleID, offset, length, data }, noReply);
         this.makeError(res);
         return res;
     }
-    async bootBrick(reply) { 
-        const res = await this.send(CommandTypes.system, Commands.bootBrick, {}, reply);
+    /**
+     * Turn on the NXT
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & { wasValid: boolean }>}
+     */
+    async bootBrick(noReply) { 
+        const res = await this.send(CommandTypes.system, Commands.bootBrick, {}, noReply);
         this.makeError(res);
         return res;
     }
-    async setBrickName(name, reply) {
-        const res = await this.send(CommandTypes.system, Commands.setBrickName, { name }, reply);
+    /**
+     * Set the name of the NXT
+     * @param {string} name 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn>}
+     */
+    async setBrickName(name, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.setBrickName, { name }, noReply);
         this.makeError(res);
         return res;
     }
-    async deviceInfo(reply) { 
-        const res = await this.send(CommandTypes.system, Commands.deviceInfo, {}, reply);
+    /**
+     * Get info about the NXT
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & {
+     *     name: string,
+     *     bluetoothAddress: string,
+     *     channelQualities: [number,number,number,number],
+     *     availableFlash: number
+     * }>}
+     */
+    async deviceInfo(noReply) { 
+        const res = await this.send(CommandTypes.system, Commands.deviceInfo, {}, noReply);
         this.makeError(res);
         return res;
     }
-    async formatFlash(reply) { 
-        const res = await this.send(CommandTypes.system, Commands.formatFlash, {}, reply);
+    /**
+     * Formats the flash inside the NXT
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn>}
+     */
+    async formatFlash(noReply) { 
+        const res = await this.send(CommandTypes.system, Commands.formatFlash, {}, noReply);
         this.makeError(res);
         return res;
     }
-    async pollLength(buffer, reply) {
-        const res = await this.send(CommandTypes.system, Commands.pollLength, { buffer }, reply);
+    /**
+     * Gets the length of a specific poll buffer
+     * @param {PollBuffers} buffer 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & {
+     *     buffer: PollBuffers,
+     *     length: number
+     * }>}
+     */
+    async pollLength(buffer, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.pollLength, { buffer }, noReply);
         this.makeError(res);
         return res;
     }
-    async poll(buffer, length, reply) {
-        const res = await this.send(CommandTypes.system, Commands.poll, { buffer, length }, reply);
+    /**
+     * Read data from the poll buffer
+     * @param {PollBuffers} buffer 
+     * @param {number} length 
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn & {
+     *     buffer: PollBuffers,
+     *     length: number,
+     *     data: Buffer
+     * }>}
+     */
+    async poll(buffer, length, noReply) {
+        const res = await this.send(CommandTypes.system, Commands.poll, { buffer, length }, noReply);
         this.makeError(res);
         return res;
     }
-    async bluetoothFactoryReset(reply) { 
-        const res = await this.send(CommandTypes.system, Commands.bluetoothFactoryReset, {}, reply);
+    /**
+     * Factory reset the NXTs bluetooth configuration
+     * @param {boolean?} noReply 
+     * @returns {Promise<CommandReturn>}
+     */
+    async bluetoothFactoryReset(noReply) { 
+        const res = await this.send(CommandTypes.system, Commands.bluetoothFactoryReset, {}, noReply);
         this.makeError(res);
         return res;
     }

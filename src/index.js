@@ -80,45 +80,34 @@ const NXTCommunication = require('./nxt-communication');
             await comms.closeModule(display);
             if (!comms.checkModule(displayId, { id: NXTCommunication.ModuleIds.display }))
                 throw new Error('Could not get the display module from the NXT');
-            const { moduleID: buttonId, handle: button } = await comms.findModule('Button.*');
-            await comms.closeModule(button);
-            if (!comms.checkModule(buttonId, { id: NXTCommunication.ModuleIds.button }))
-                console.warn('Could not get the button module from the NXT, window inputs will be dissabled');
+            const { moduleID: uiID, handle: ui } = await comms.findModule('Ui.*');
+            await comms.closeModule(ui);
+            if (!comms.checkModule(uiID, { id: NXTCommunication.ModuleIds.ui }))
+                console.warn('Could not get the UI module from the NXT, window inputs will be dissabled');
             else {
                 document.on('keydown', async e => {
-                    let button;
+                    let buttonCode;
+                    let buttonKey
                     switch (e.code) {
                     default: return;
                     case 'ArrowUp':
                     case 'Enter':
-                    case 'KeyW': button = 3; break;
+                    case 'KeyW': buttonCode = 2; buttonKey = 3; break;
                     case 'ArrowDown':
                     case 'Escape':
-                    case 'KeyS': button = 0; break;
+                    case 'KeyS':
+                        buttonCode = 4;
+                        buttonKey = 0;
+                        // stop any running programs, as thats what exit normally does
+                        comms.stopProgram(true);
+                        break;
                     case 'ArrowLeft':
-                    case 'KeyA': button = 2; break;
+                    case 'KeyA': buttonCode = 1; buttonKey = 2; break;
                     case 'ArrowRight':
-                    case 'KeyD': button = 1; break;
+                    case 'KeyD': buttonCode = 3; buttonKey = 1; break;
                     }
-                    await comms.writeIOMap(buttonId, 32 + button, 1, Buffer.from([0x80]));
+                    await comms.writeIOMap(uiID, 28, 1, Buffer.from([buttonCode]));
                 });
-                document.on('keyup', async e => {
-                    let button;
-                    switch (e.code) {
-                    default: return;
-                    case 'ArrowUp':
-                    case 'Enter':
-                    case 'KeyW': button = 3; break;
-                    case 'ArrowDown':
-                    case 'Escape':
-                    case 'KeyS': button = 0; break;
-                    case 'ArrowLeft':
-                    case 'KeyA': button = 2; break;
-                    case 'ArrowRight':
-                    case 'KeyD': button = 1; break;
-                    }
-                    await comms.writeIOMap(buttonId, 32 + button, 1, Buffer.from([0x00]));
-                })
             }
             (async function getFrame() {
                 const start = Date.now();
